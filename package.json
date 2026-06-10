@@ -1,0 +1,14 @@
+{
+  "name": "wt-tetris-duel",
+  "version": "1.0.0",
+  "description": "1v1 multiplayer Tetris with line-clear difficulty attacks",
+  "type": "module",
+  "main": "server/server.js",
+  "scripts": {
+    "start": "node server/server.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

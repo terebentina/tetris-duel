@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Tetris Duel — 1v1</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <!-- ============ MENU ============ -->
+  <section id="screen-menu" class="screen active">
+    <h1 class="logo">TETRIS <span>DUEL</span></h1>
+    <p class="tagline">Clear lines. Curse your friend. Last one standing wins.</p>
+
+    <div class="card">
+      <label for="name-input">Player name</label>
+      <input id="name-input" maxlength="16" placeholder="Your name" autocomplete="off" />
+
+      <div class="menu-actions">
+        <button id="btn-create" class="primary">Create game</button>
+        <div class="join-row">
+          <input id="join-code" maxlength="4" placeholder="CODE" autocomplete="off" />
+          <button id="btn-join">Join game</button>
+        </div>
+      </div>
+      <p id="menu-error" class="error"></p>
+    </div>
+
+    <div class="card">
+      <h2>Leaderboard</h2>
+      <table id="leaderboard">
+        <thead>
+          <tr><th>#</th><th>Player</th><th>Wins</th><th>Lines</th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <div class="card help">
+      <h2>How it works</h2>
+      <ul>
+        <li>Clear lines to curse your opponent — the more lines at once, the worse it gets:</li>
+        <li><b>1 line</b> ☠ their next pieces become awkward S/Z bricks</li>
+        <li><b>2 lines</b> 💨 + wind pushes their falling piece sideways</li>
+        <li><b>3 lines</b> 🌀 + their piece spins on its own</li>
+        <li><b>4 lines</b> 🔥 all of it, longer and harder</li>
+        <li>Controls: ←/→ move · ↑/X rotate · Z rotate back · ↓ soft drop · Space hard drop</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ============ LOBBY ============ -->
+  <section id="screen-lobby" class="screen">
+    <h1 class="logo small">TETRIS <span>DUEL</span></h1>
+    <div class="card lobby-card">
+      <p class="muted">Room code</p>
+      <div class="code-row">
+        <div id="lobby-code" class="room-code">----</div>
+        <button id="btn-copy-code">Copy</button>
+      </div>
+      <div class="vs-row">
+        <div class="player-tag" id="lobby-you">you</div>
+        <div class="vs">VS</div>
+        <div class="player-tag muted" id="lobby-opponent">waiting…</div>
+      </div>
+      <p id="lobby-status" class="muted"></p>
+      <button id="btn-ready" class="primary">Ready</button>
+      <button id="btn-lobby-back" class="ghost">Back to menu</button>
+    </div>
+  </section>
+
+  <!-- ============ GAME ============ -->
+  <section id="screen-game" class="screen">
+    <div class="game-layout">
+      <div class="side-panel">
+        <h3 id="you-name" class="panel-name you">you</h3>
+        <div class="stat"><span>Score</span><b id="you-score">0</b></div>
+        <div class="stat"><span>Lines</span><b id="you-lines">0</b></div>
+        <div class="stat"><span>Level</span><b id="you-level">1</b></div>
+        <h4>Next</h4>
+        <canvas class="next-piece" width="84" height="56"></canvas>
+        <canvas class="next-piece" width="84" height="56"></canvas>
+        <canvas class="next-piece" width="84" height="56"></canvas>
+        <h4>Curses on you</h4>
+        <div id="effects"></div>
+      </div>
+
+      <canvas id="board"></canvas>
+
+      <div class="side-panel">
+        <h3 id="opp-name" class="panel-name opp">opponent</h3>
+        <div class="stat"><span>Score</span><b id="opp-score">0</b></div>
+        <div class="stat"><span>Lines</span><b id="opp-lines">0</b></div>
+        <canvas id="opp-board"></canvas>
+      </div>
+    </div>
+
+    <div id="gameover-overlay">
+      <div class="card gameover-card">
+        <h1 id="gameover-title"></h1>
+        <p id="gameover-sub" class="muted"></p>
+        <button id="btn-rematch" class="primary">Rematch</button>
+        <button id="btn-exit" class="ghost">Back to menu</button>
+      </div>
+    </div>
+  </section>
+
+  <script type="module" src="/js/main.js"></script>
+</body>
+</html>
