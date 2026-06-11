@@ -3,12 +3,21 @@
   "version": "1.0.0",
   "description": "1v1 multiplayer Tetris with line-clear difficulty attacks",
   "type": "module",
-  "main": "server/server.js",
+  "main": "server/server.ts",
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
-    "start": "node server/server.js",
-    "test": "node --test"
+    "start": "node server/server.ts",
+    "test": "node --test",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/ws": "^8.18.0",
+    "typescript": "^5.9.0"
   }
 }

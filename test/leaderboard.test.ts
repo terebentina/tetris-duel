@@ -3,9 +3,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { Leaderboard } from '../server/leaderboard.js';
+import { Leaderboard } from '../server/leaderboard.ts';
 
-function tmpFile() {
+function tmpFile(): string {
   return path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'lb-')), 'leaderboard.json');
 }
 

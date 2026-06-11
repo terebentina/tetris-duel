@@ -1,15 +1,26 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { RoomManager, sanitizeName } from '../server/rooms.js';
+import { RoomManager, sanitizeName } from '../server/rooms.ts';
+import type { Client, LeaderboardLike } from '../server/rooms.ts';
+import type { ServerMessage } from '../public/js/protocol.ts';
 
-function fakeClient() {
-  const c = {
+interface FakeClient extends Client {
+  sent: ServerMessage[];
+  last<T extends ServerMessage['type']>(
+    type: T
+  ): Extract<ServerMessage, { type: T }> | undefined;
+}
+
+function fakeClient(): FakeClient {
+  const c: FakeClient = {
     sent: [],
     send(obj) {
       c.sent.push(obj);
     },
     last(type) {
-      return [...c.sent].reverse().find((m) => m.type === type);
+      return [...c.sent]
+        .reverse()
+        .find((m): m is Extract<ServerMessage, { type: typeof type }> => m.type === type);
     },
     name: null,
     room: null,
@@ -18,7 +29,11 @@ function fakeClient() {
   return c;
 }
 
-function fakeLeaderboard() {
+interface FakeLeaderboard extends LeaderboardLike {
+  records: { name: string; win: boolean; lines?: number }[];
+}
+
+function fakeLeaderboard(): FakeLeaderboard {
   return {
     records: [],
     record(name, result) {
@@ -33,7 +48,7 @@ function setupMatch() {
   const a = fakeClient();
   const b = fakeClient();
   mgr.handleMessage(a, { type: 'create', name: 'Alice' });
-  const code = a.last('created').code;
+  const code = a.last('created')!.code;
   mgr.handleMessage(b, { type: 'join', code, name: 'Bob' });
   return { mgr, lb, a, b, code };
 }
@@ -41,7 +56,7 @@ function setupMatch() {
 test('sanitizeName trims, strips junk and enforces length', () => {
   assert.equal(sanitizeName('  Dan  '), 'Dan');
   assert.equal(sanitizeName('<script>x</script>'), 'scriptxscript');
-  assert.equal(sanitizeName('a'.repeat(40)).length, 16);
+  assert.equal(sanitizeName('a'.repeat(40))!.length, 16);
   assert.equal(sanitizeName('   '), null);
   assert.equal(sanitizeName(42), null);
 });
@@ -57,23 +72,23 @@ test('create returns a 4-char room code', () => {
 
 test('join notifies both players', () => {
   const { a, b, code } = setupMatch();
-  assert.equal(b.last('joined').opponent, 'Alice');
-  assert.equal(b.last('joined').code, code);
-  assert.equal(a.last('opponent_joined').opponent, 'Bob');
+  assert.equal(b.last('joined')!.opponent, 'Alice');
+  assert.equal(b.last('joined')!.code, code);
+  assert.equal(a.last('opponent_joined')!.opponent, 'Bob');
 });
 
 test('joining an unknown room errors', () => {
   const mgr = new RoomManager(fakeLeaderboard());
   const c = fakeClient();
   mgr.handleMessage(c, { type: 'join', code: 'XXXX', name: 'Bob' });
-  assert.equal(c.last('error').error, 'room not found');
+  assert.equal(c.last('error')!.error, 'room not found');
 });
 
 test('a third player cannot join a full room', () => {
   const { mgr, code } = setupMatch();
   const c = fakeClient();
   mgr.handleMessage(c, { type: 'join', code, name: 'Carl' });
-  assert.equal(c.last('error').error, 'room is full');
+  assert.equal(c.last('error')!.error, 'room is full');
 });
 
 test('game starts with a shared seed when both players are ready', () => {
@@ -95,7 +110,7 @@ test('state messages relay to the opponent only', () => {
   mgr.handleMessage(a, { type: 'ready' });
   mgr.handleMessage(b, { type: 'ready' });
   mgr.handleMessage(a, { type: 'state', state: { score: 42 } });
-  assert.equal(b.last('opponent_state').state.score, 42);
+  assert.equal(b.last('opponent_state')!.state.score, 42);
   assert.ok(!a.last('opponent_state'));
 });
 
@@ -104,9 +119,9 @@ test('line clears become attacks on the opponent, clamped to 4', () => {
   mgr.handleMessage(a, { type: 'ready' });
   mgr.handleMessage(b, { type: 'ready' });
   mgr.handleMessage(a, { type: 'clear', count: 2 });
-  assert.equal(b.last('attack').count, 2);
+  assert.equal(b.last('attack')!.count, 2);
   mgr.handleMessage(a, { type: 'clear', count: 99 });
-  assert.equal(b.last('attack').count, 4);
+  assert.equal(b.last('attack')!.count, 4);
 });
 
 test('gameover ends the match, opponent wins, leaderboard records both', () => {
@@ -115,11 +130,11 @@ test('gameover ends the match, opponent wins, leaderboard records both', () => {
   mgr.handleMessage(b, { type: 'ready' });
   mgr.handleMessage(a, { type: 'clear', count: 3 });
   mgr.handleMessage(a, { type: 'gameover' }); // Alice tops out
-  assert.equal(a.last('end').youWin, false);
-  assert.equal(b.last('end').youWin, true);
-  assert.equal(b.last('end').winner, 'Bob');
-  const bob = lb.records.find((r) => r.name === 'Bob');
-  const alice = lb.records.find((r) => r.name === 'Alice');
+  assert.equal(a.last('end')!.youWin, false);
+  assert.equal(b.last('end')!.youWin, true);
+  assert.equal(b.last('end')!.winner, 'Bob');
+  const bob = lb.records.find((r) => r.name === 'Bob')!;
+  const alice = lb.records.find((r) => r.name === 'Alice')!;
   assert.equal(bob.win, true);
   assert.equal(alice.win, false);
   assert.equal(alice.lines, 3);
@@ -143,7 +158,7 @@ test('disconnect mid-game forfeits to the opponent', () => {
   mgr.handleMessage(a, { type: 'ready' });
   mgr.handleMessage(b, { type: 'ready' });
   mgr.handleDisconnect(a);
-  const end = b.last('end');
+  const end = b.last('end')!;
   assert.equal(end.youWin, true);
   assert.equal(end.forfeit, true);
   assert.ok(lb.records.find((r) => r.name === 'Bob' && r.win));

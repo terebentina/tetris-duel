@@ -2,22 +2,23 @@
 // line clears and the opponent-inflicted difficulty effects.
 // Pure logic — no DOM/canvas — so it runs in Node tests and the browser.
 
-import { PIECES, SevenBag, mulberry32 } from './pieces.js';
+import { PIECES, SevenBag, mulberry32 } from './pieces.ts';
+import type { Cell, PieceType } from './pieces.ts';
 
 export const COLS = 10;
 export const ROWS = 22; // top HIDDEN rows are above the visible field
 export const HIDDEN = 2;
 
-export const HARD_TYPES = ['S', 'Z'];
+export const HARD_TYPES: PieceType[] = ['S', 'Z'];
 
-const SCORE_TABLE = { 1: 100, 2: 300, 3: 500, 4: 800 };
+const SCORE_TABLE: Record<number, number> = { 1: 100, 2: 300, 3: 500, 4: 800 };
 
 // Effect pacing (ms)
 export const WIND_INTERVAL = 480;
 export const SPIN_INTERVAL = 1400;
 
 // Basic wall kicks tried in order when rotating.
-const KICKS = [
+const KICKS: Cell[] = [
   [0, 0],
   [-1, 0],
   [1, 0],
@@ -26,51 +27,85 @@ const KICKS = [
   [0, -1],
 ];
 
+export interface ActivePiece {
+  type: PieceType;
+  rot: number;
+  x: number;
+  y: number;
+}
+
+export type GameEvent =
+  | { type: 'clear'; rows: number[]; count: number }
+  | { type: 'lock' }
+  | { type: 'gameover' }
+  | { type: 'attack'; n: number }
+  | { type: 'wind'; dir: number }
+  | { type: 'spin' }
+  | { type: 'spawn'; piece: PieceType };
+
+// Compact board snapshot (array of row strings) for network sync.
+export interface Snapshot {
+  rows: string[];
+  current: ActivePiece | null;
+  score: number;
+  lines: number;
+  level: number;
+  over: boolean;
+}
+
 export class Game {
-  constructor(seed = Date.now() & 0xffffffff) {
+  seed: number;
+  bag: SevenBag;
+  rng: () => number;
+  board: (PieceType | null)[][];
+  queue: PieceType[];
+  current!: ActivePiece; // assigned by spawn() in the constructor
+  score = 0;
+  lines = 0;
+  level = 1;
+  over = false;
+  // Difficulty effects inflicted by the opponent, measured in
+  // "pieces remaining under the effect".
+  hardPieces = 0;
+  windPieces = 0;
+  spinPieces = 0;
+  windDir = 1;
+  // timers
+  gravityAcc = 0;
+  windAcc = 0;
+  spinAcc = 0;
+  softDropping = false;
+  // Events for the renderer / network layer to consume each frame:
+  // {type:'clear', rows, count} {type:'lock'} {type:'gameover'}
+  // {type:'attack', n} {type:'wind', dir} {type:'spin'} {type:'spawn'}
+  events: GameEvent[] = [];
+
+  constructor(seed: number = Date.now() & 0xffffffff) {
     this.seed = seed;
     this.bag = new SevenBag(seed);
     this.rng = mulberry32(seed ^ 0x9e3779b9);
-    this.board = Array.from({ length: ROWS }, () => Array(COLS).fill(null));
+    this.board = Array.from({ length: ROWS }, () =>
+      Array<PieceType | null>(COLS).fill(null)
+    );
     this.queue = [this.bag.next(), this.bag.next(), this.bag.next()];
-    this.current = null;
-    this.score = 0;
-    this.lines = 0;
-    this.level = 1;
-    this.over = false;
-    // Difficulty effects inflicted by the opponent, measured in
-    // "pieces remaining under the effect".
-    this.hardPieces = 0;
-    this.windPieces = 0;
-    this.spinPieces = 0;
-    this.windDir = 1;
-    // timers
-    this.gravityAcc = 0;
-    this.windAcc = 0;
-    this.spinAcc = 0;
-    this.softDropping = false;
-    // Events for the renderer / network layer to consume each frame:
-    // {type:'clear', rows, count} {type:'lock'} {type:'gameover'}
-    // {type:'attack', n} {type:'wind', dir} {type:'spin'} {type:'spawn'}
-    this.events = [];
     this.spawn();
   }
 
-  gravityInterval() {
+  gravityInterval(): number {
     return Math.max(90, 800 - (this.level - 1) * 60);
   }
 
-  spawn() {
-    let type;
+  spawn(): void {
+    let type: PieceType;
     if (this.hardPieces > 0) {
       type = HARD_TYPES[Math.floor(this.rng() * HARD_TYPES.length)];
       this.hardPieces--;
     } else {
-      type = this.queue.shift();
+      type = this.queue.shift()!;
       this.queue.push(this.bag.next());
     }
     const size = PIECES[type].size;
-    const piece = { type, rot: 0, x: Math.floor((COLS - size) / 2), y: 0 };
+    const piece: ActivePiece = { type, rot: 0, x: Math.floor((COLS - size) / 2), y: 0 };
     this.current = piece;
     this.events.push({ type: 'spawn', piece: type });
     if (this.collides(piece)) {
@@ -79,14 +114,14 @@ export class Game {
     }
   }
 
-  cellsAt(piece) {
-    return PIECES[piece.type].rotations[piece.rot].map(([cx, cy]) => [
+  cellsAt(piece: ActivePiece): Cell[] {
+    return PIECES[piece.type].rotations[piece.rot].map<Cell>(([cx, cy]) => [
       piece.x + cx,
       piece.y + cy,
     ]);
   }
 
-  collides(piece) {
+  collides(piece: ActivePiece): boolean {
     for (const [x, y] of this.cellsAt(piece)) {
       if (x < 0 || x >= COLS || y < 0 || y >= ROWS) return true;
       if (this.board[y][x]) return true;
@@ -94,7 +129,7 @@ export class Game {
     return false;
   }
 
-  move(dx) {
+  move(dx: number): boolean {
     if (this.over) return false;
     const p = { ...this.current, x: this.current.x + dx };
     if (this.collides(p)) return false;
@@ -102,7 +137,7 @@ export class Game {
     return true;
   }
 
-  rotate(dir = 1) {
+  rotate(dir = 1): boolean {
     if (this.over) return false;
     const rot = (this.current.rot + dir + 4) % 4;
     for (const [kx, ky] of KICKS) {
@@ -116,7 +151,7 @@ export class Game {
   }
 
   // Move the current piece down one row; lock it if it cannot move.
-  descend({ scorePerCell = 0 } = {}) {
+  descend({ scorePerCell = 0 }: { scorePerCell?: number } = {}): boolean {
     if (this.over) return false;
     const p = { ...this.current, y: this.current.y + 1 };
     if (this.collides(p)) {
@@ -128,11 +163,11 @@ export class Game {
     return true;
   }
 
-  softDrop() {
+  softDrop(): boolean {
     return this.descend({ scorePerCell: 1 });
   }
 
-  hardDrop() {
+  hardDrop(): number {
     if (this.over) return 0;
     let dropped = 0;
     let p = { ...this.current, y: this.current.y + 1 };
@@ -146,7 +181,7 @@ export class Game {
     return dropped;
   }
 
-  ghostY() {
+  ghostY(): number {
     let p = { ...this.current };
     let q = { ...p, y: p.y + 1 };
     while (!this.collides(q)) {
@@ -156,7 +191,7 @@ export class Game {
     return p.y;
   }
 
-  lock() {
+  lock(): number {
     const cells = this.cellsAt(this.current);
     for (const [x, y] of cells) {
       this.board[y][x] = this.current.type;
@@ -176,15 +211,15 @@ export class Game {
     return cleared;
   }
 
-  clearLines() {
-    const fullRows = [];
+  clearLines(): number {
+    const fullRows: number[] = [];
     for (let y = 0; y < ROWS; y++) {
       if (this.board[y].every((c) => c)) fullRows.push(y);
     }
     if (fullRows.length === 0) return 0;
     for (const y of fullRows) {
       this.board.splice(y, 1);
-      this.board.unshift(Array(COLS).fill(null));
+      this.board.unshift(Array<PieceType | null>(COLS).fill(null));
     }
     const n = fullRows.length;
     this.score += (SCORE_TABLE[n] || 0) * this.level;
@@ -197,7 +232,7 @@ export class Game {
   // Opponent cleared `n` lines at once — make life harder over here.
   // 1: next piece(s) are S/Z   2: + wind drift   3: + auto-rotation
   // 4: everything, longer and stronger.
-  applyAttack(n) {
+  applyAttack(n: number): void {
     if (this.over) return;
     n = Math.max(1, Math.min(4, n));
     this.hardPieces += n;
@@ -217,7 +252,7 @@ export class Game {
   }
 
   // Advance the simulation by dt milliseconds.
-  update(dt) {
+  update(dt: number): void {
     if (this.over) return;
 
     this.gravityAcc += dt;
@@ -253,14 +288,13 @@ export class Game {
     }
   }
 
-  takeEvents() {
+  takeEvents(): GameEvent[] {
     const ev = this.events;
     this.events = [];
     return ev;
   }
 
-  // Compact board snapshot (array of row strings) for network sync.
-  snapshot() {
+  snapshot(): Snapshot {
     const rows = this.board.map((row) => row.map((c) => c || '.').join(''));
     return {
       rows,

@@ -8,9 +8,9 @@ import {
   HARD_TYPES,
   WIND_INTERVAL,
   SPIN_INTERVAL,
-} from '../public/js/engine.js';
+} from '../public/js/engine.ts';
 
-function fillRow(game, y, { except = [] } = {}) {
+function fillRow(game: Game, y: number, { except = [] }: { except?: number[] } = {}): void {
   for (let x = 0; x < COLS; x++) {
     if (!except.includes(x)) game.board[y][x] = 'I';
   }

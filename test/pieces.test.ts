@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { PIECES, TYPES, SevenBag, mulberry32 } from '../public/js/pieces.js';
+import { PIECES, TYPES, SevenBag, mulberry32 } from '../public/js/pieces.ts';
 
 test('every piece has 4 rotations of 4 cells each', () => {
   for (const type of TYPES) {
@@ -25,7 +25,7 @@ test('O piece is rotation-invariant', () => {
 test('7-bag yields each piece exactly once per bag', () => {
   const bag = new SevenBag(42);
   for (let cycle = 0; cycle < 10; cycle++) {
-    const drawn = new Set();
+    const drawn = new Set<string>();
     for (let i = 0; i < 7; i++) drawn.add(bag.next());
     assert.equal(drawn.size, 7, 'each cycle of 7 contains all types');
   }

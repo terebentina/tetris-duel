@@ -8,29 +8,39 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import WebSocket from 'ws';
-import { createServer } from '../server/server.js';
-import { Game } from '../public/js/engine.js';
+import type { AddressInfo } from 'node:net';
+import { createServer } from '../server/server.ts';
+import { Game } from '../public/js/engine.ts';
+import type { ClientMessage, ServerMessage } from '../public/js/protocol.ts';
 
-function wsClient(port) {
+function wsClient(port: number) {
   const ws = new WebSocket(`ws://127.0.0.1:${port}`);
-  const inbox = [];
-  const waiters = [];
+  const inbox: ServerMessage[] = [];
+  const waiters: { type: string; resolve: (msg: ServerMessage) => void }[] = [];
   ws.on('message', (data) => {
-    const msg = JSON.parse(data);
+    const msg = JSON.parse(String(data)) as ServerMessage;
     const i = waiters.findIndex((w) => w.type === msg.type);
     if (i >= 0) waiters.splice(i, 1)[0].resolve(msg);
     else inbox.push(msg);
   });
   return {
     ws,
-    send: (obj) => ws.send(JSON.stringify(obj)),
-    open: () => new Promise((res, rej) => (ws.on('open', res), ws.on('error', rej))),
-    next(type, timeout = 3000) {
+    send: (obj: ClientMessage) => ws.send(JSON.stringify(obj)),
+    open: () =>
+      new Promise<void>((res, rej) => (ws.on('open', () => res()), ws.on('error', rej))),
+    next<T extends ServerMessage['type']>(
+      type: T,
+      timeout = 3000
+    ): Promise<Extract<ServerMessage, { type: T }>> {
+      type Msg = Extract<ServerMessage, { type: T }>;
       const i = inbox.findIndex((m) => m.type === type);
-      if (i >= 0) return Promise.resolve(inbox.splice(i, 1)[0]);
-      return new Promise((resolve, reject) => {
+      if (i >= 0) return Promise.resolve(inbox.splice(i, 1)[0] as Msg);
+      return new Promise<Msg>((resolve, reject) => {
         const t = setTimeout(() => reject(new Error(`timeout waiting for "${type}"`)), timeout);
-        waiters.push({ type, resolve: (m) => (clearTimeout(t), resolve(m)) });
+        waiters.push({
+          type,
+          resolve: (m) => (clearTimeout(t), resolve(m as Msg)),
+        });
       });
     },
     close: () => ws.close(),
@@ -42,17 +52,19 @@ test('full match over real websockets', async (t) => {
   const { server, leaderboard } = createServer({
     leaderboardFile: path.join(dir, 'leaderboard.json'),
   });
-  await new Promise((res) => server.listen(0, res));
-  const port = server.address().port;
+  await new Promise<void>((res) => server.listen(0, res));
+  const port = (server.address() as AddressInfo).port;
   t.after(() => server.close());
 
   // static files + health
   const index = await fetch(`http://127.0.0.1:${port}/`);
   assert.equal(index.status, 200);
   assert.match(await index.text(), /TETRIS/);
-  const js = await fetch(`http://127.0.0.1:${port}/js/engine.js`);
+  // client TypeScript is served type-stripped as plain JavaScript
+  const js = await fetch(`http://127.0.0.1:${port}/js/engine.ts`);
   assert.equal(js.status, 200);
-  assert.match(js.headers.get('content-type'), /javascript/);
+  assert.match(js.headers.get('content-type') ?? '', /javascript/);
+  assert.doesNotMatch(await js.text(), /interface Snapshot/);
   assert.equal((await fetch(`http://127.0.0.1:${port}/healthz`)).status, 200);
   // path traversal is blocked
   const evil = await fetch(`http://127.0.0.1:${port}/..%2f..%2fpackage.json`);
@@ -104,9 +116,11 @@ test('full match over real websockets', async (t) => {
   assert.equal(endA.winner, 'Alice');
 
   // leaderboard recorded and served over HTTP
-  const lb = await (await fetch(`http://127.0.0.1:${port}/api/leaderboard`)).json();
-  const aliceEntry = lb.find((e) => e.name === 'Alice');
-  const bobEntry = lb.find((e) => e.name === 'Bob');
+  const lb = (await (
+    await fetch(`http://127.0.0.1:${port}/api/leaderboard`)
+  ).json()) as { name: string; wins: number; losses: number; lines: number }[];
+  const aliceEntry = lb.find((e) => e.name === 'Alice')!;
+  const bobEntry = lb.find((e) => e.name === 'Bob')!;
   assert.equal(aliceEntry.wins, 1);
   assert.equal(aliceEntry.lines, 3);
   assert.equal(bobEntry.losses, 1);
@@ -124,8 +138,8 @@ test('disconnect mid-game forfeits over the wire', async (t) => {
   const { server } = createServer({
     leaderboardFile: path.join(dir, 'leaderboard.json'),
   });
-  await new Promise((res) => server.listen(0, res));
-  const port = server.address().port;
+  await new Promise<void>((res) => server.listen(0, res));
+  const port = (server.address() as AddressInfo).port;
   t.after(() => server.close());
 
   const alice = wsClient(port);
