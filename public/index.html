@@ -17,7 +17,9 @@
       <input id="name-input" maxlength="16" placeholder="Your name" autocomplete="off" />
 
       <div class="menu-actions">
-        <button id="btn-create" class="primary">Create game</button>
+        <button id="btn-solo" class="primary">Single player</button>
+        <div class="menu-divider">or challenge a friend</div>
+        <button id="btn-create">Create game</button>
         <div class="join-row">
           <input id="join-code" maxlength="4" placeholder="CODE" autocomplete="off" />
           <button id="btn-join">Join game</button>
@@ -44,6 +46,7 @@
         <li><b>2 lines</b> 💨 + wind pushes their falling piece sideways</li>
         <li><b>3 lines</b> 🌀 + their piece spins on its own</li>
         <li><b>4 lines</b> 🔥 all of it, longer and harder</li>
+        <li><b>Single player</b> pits you against yourself — every clear curses <i>your own</i> board. How long can you survive your own success?</li>
         <li>Controls: ←/→ move · ↑/X rotate · Z rotate back · ↓ soft drop · Space hard drop</li>
       </ul>
     </div>
@@ -87,7 +90,7 @@
 
       <canvas id="board"></canvas>
 
-      <div class="side-panel">
+      <div class="side-panel" id="opp-panel">
         <h3 id="opp-name" class="panel-name opp">opponent</h3>
         <div class="stat"><span>Score</span><b id="opp-score">0</b></div>
         <div class="stat"><span>Lines</span><b id="opp-lines">0</b></div>
