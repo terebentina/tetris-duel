@@ -38,6 +38,8 @@ let oppSnapshot: Snapshot | null = null;
 let playerName = localStorage.getItem('tetris.name') || '';
 let roomCode: string | null = null;
 let inGame = false;
+// Single player: no server involved, your own line clears curse you.
+let solo = false;
 let lastStateSync = 0;
 let banner: Banner = { text: '', t: 0, color: '#fff' };
 
@@ -85,6 +87,19 @@ function requireName(): string | null {
 function setMenuError(text: string): void {
   $('#menu-error').textContent = text;
 }
+
+$('#btn-solo').addEventListener('click', () => {
+  const name = $<HTMLInputElement>('#name-input').value.trim();
+  if (name) {
+    playerName = name;
+    localStorage.setItem('tetris.name', name);
+  } else {
+    playerName = 'You';
+  }
+  setMenuError('');
+  solo = true;
+  startGame({ seed: Date.now() & 0xffffffff, opponent: playerName });
+});
 
 $('#btn-create').addEventListener('click', async () => {
   const name = requireName();
@@ -164,6 +179,7 @@ $('#btn-copy-code').addEventListener('click', async () => {
 
 function backToMenu(): void {
   inGame = false;
+  solo = false;
   game = null;
   oppSnapshot = null;
   $('#gameover-overlay').classList.remove('visible');
@@ -184,7 +200,10 @@ net.on('opponent_ready', () => {
   $('#lobby-status').textContent = 'Opponent is ready!';
 });
 net.on('error', (msg) => setMenuError(msg.error));
-net.on('start', (msg) => startGame(msg));
+net.on('start', (msg) => {
+  solo = false;
+  startGame(msg);
+});
 net.on('opponent_state', (msg) => {
   oppSnapshot = msg.state;
   $('#opp-score').textContent = String(msg.state.score);
@@ -204,6 +223,7 @@ net.on('opponent_left', () => {
   }
 });
 net.onClose = () => {
+  if (solo) return; // solo play doesn't use the connection
   if (inGame || screens.lobby.classList.contains('active')) {
     backToMenu();
     setMenuError('Connection lost');
@@ -230,6 +250,7 @@ function startGame({ seed, opponent }: { seed: number; opponent: string }): void
   $('#opp-name').textContent = opponent;
   $('#opp-score').textContent = '0';
   $('#opp-lines').textContent = '0';
+  screens.game.classList.toggle('solo', solo);
   $('#gameover-overlay').classList.remove('visible');
   if (!renderer) {
     renderer = new Renderer($<HTMLCanvasElement>('#board'), { cell: 28 });
@@ -242,6 +263,16 @@ function startGame({ seed, opponent }: { seed: number; opponent: string }): void
 let countdownT = 0;
 function countdown(n: number): void {
   countdownT = n * 1000;
+}
+
+function endSoloGame(g: Game): void {
+  inGame = false;
+  $('#gameover-title').textContent = 'GAME OVER';
+  $('#gameover-title').className = 'lose';
+  $('#gameover-sub').textContent = `Bested by yourself — ${g.score} points · ${g.lines} lines.`;
+  $<HTMLButtonElement>('#btn-rematch').disabled = false;
+  $('#btn-rematch').textContent = 'Play again';
+  $('#gameover-overlay').classList.add('visible');
 }
 
 function endGame(msg: Extract<ServerMessage, { type: 'end' }>): void {
@@ -260,13 +291,17 @@ function endGame(msg: Extract<ServerMessage, { type: 'end' }>): void {
 }
 
 $('#btn-rematch').addEventListener('click', () => {
+  if (solo) {
+    startGame({ seed: Date.now() & 0xffffffff, opponent: playerName });
+    return;
+  }
   net.send({ type: 'ready' });
   $<HTMLButtonElement>('#btn-rematch').disabled = true;
   $('#btn-rematch').textContent = 'Waiting for opponent…';
 });
 
 $('#btn-exit').addEventListener('click', () => {
-  net.send({ type: 'leave' });
+  if (!solo) net.send({ type: 'leave' });
   backToMenu();
 });
 
@@ -393,7 +428,10 @@ function loop(now: number): void {
       switch (ev.type) {
         case 'clear':
           renderer.lineClear(ev.rows, ev.count);
-          net.send({ type: 'clear', count: ev.count });
+          // In solo play you are your own opponent: the curse you would
+          // inflict on them lands on your board instead.
+          if (solo) g.applyAttack(ev.count);
+          else net.send({ type: 'clear', count: ev.count });
           showBanner(
             ev.count >= 4 ? 'TETRIS!' : `${ev.count} LINE${ev.count > 1 ? 'S' : ''}!`,
             '#19d24b'
@@ -407,7 +445,8 @@ function loop(now: number): void {
           renderer.lockThud();
           break;
         case 'gameover':
-          net.send({ type: 'gameover' });
+          if (solo) endSoloGame(g);
+          else net.send({ type: 'gameover' });
           break;
       }
     }
@@ -415,14 +454,16 @@ function loop(now: number): void {
     updateHud(g, renderer);
     renderer.update(dt);
     renderer.render(g, { isOver: g.over });
-    oppRenderer.update(dt);
-    oppRenderer.renderSnapshot(oppSnapshot);
+    if (!solo) {
+      oppRenderer.update(dt);
+      oppRenderer.renderSnapshot(oppSnapshot);
+    }
 
     drawOverlays(renderer, dt);
 
     // throttled board sync to the opponent
     lastStateSync += dt;
-    if (lastStateSync >= 120 && !g.over) {
+    if (!solo && lastStateSync >= 120 && !g.over) {
       lastStateSync = 0;
       net.send({ type: 'state', state: g.snapshot() });
     }
@@ -472,6 +513,7 @@ declare global {
     __tetris: {
       readonly game: Game | null;
       readonly inGame: boolean;
+      readonly solo: boolean;
       readonly countdownT: number;
     };
   }
@@ -483,6 +525,9 @@ window.__tetris = {
   },
   get inGame() {
     return inGame;
+  },
+  get solo() {
+    return solo;
   },
   get countdownT() {
     return countdownT;

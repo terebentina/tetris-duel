@@ -211,3 +211,90 @@ test('two browsers play a full match', { skip: !chromium }, async (t) => {
 
   assert.deepEqual(errors, [], 'no browser console errors');
 });
+
+test('single player plays against themselves', { skip: !chromium }, async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'tetris-browser-solo-'));
+  const { server } = createServer({
+    leaderboardFile: path.join(dir, 'leaderboard.json'),
+  });
+  await new Promise<void>((res) => server.listen(0, res));
+  const port = (server.address() as AddressInfo).port;
+  const url = `http://127.0.0.1:${port}`;
+  t.after(() => server.close());
+
+  let browser: Browser;
+  try {
+    browser = await chromium!.launch();
+  } catch {
+    t.skip('chromium not installed');
+    return;
+  }
+  t.after(() => browser.close());
+
+  const page = await (await browser.newContext()).newPage();
+  const errors: string[] = [];
+  page.on('pageerror', (e) => errors.push(String(e)));
+  page.on('console', (m) => {
+    if (m.type() === 'error') errors.push(m.text());
+  });
+
+  // --- menu: starting solo skips the lobby entirely -------------------
+  await page.goto(url);
+  await page.fill('#name-input', 'Loner');
+  await page.click('#btn-solo');
+  await page.waitForSelector('#screen-game.active.solo');
+  await page.waitForFunction(() => window.__tetris.countdownT <= 0, null, {
+    timeout: 8000,
+  });
+  assert.equal(await page.evaluate(() => window.__tetris.solo), true);
+
+  // the opponent panel is hidden — there is no opponent
+  const oppHidden = await page.evaluate(
+    () => getComputedStyle(document.querySelector('#opp-panel')!).display === 'none'
+  );
+  assert.ok(oppHidden, 'opponent panel hidden in solo');
+
+  // --- clearing lines curses your own board ---------------------------
+  await page.evaluate(() => {
+    const g = window.__tetris.game!;
+    for (let y = 1; y <= 3; y++) {
+      g.board[g.board.length - y] = new Array<PieceType | null>(10).fill('I');
+    }
+    g.clearLines(); // the game loop bounces the attack back at the player
+  });
+  await page.waitForFunction(() => window.__tetris.game!.hardPieces > 0, null, {
+    timeout: 5000,
+  });
+  const fx = await page.evaluate(() => ({
+    hard: window.__tetris.game!.hardPieces,
+    wind: window.__tetris.game!.windPieces,
+    spin: window.__tetris.game!.spinPieces,
+  }));
+  assert.ok(fx.hard >= 1, 'cursed pieces queued on own board');
+  assert.ok(fx.wind >= 1, 'wind active on own board');
+  assert.ok(fx.spin >= 1, 'spin active on own board');
+
+  // --- topping out ends the game without any server round-trip --------
+  await page.evaluate(() => {
+    const g = window.__tetris.game!;
+    for (let y = 0; y < g.board.length; y++) {
+      g.board[y] = g.board[y].map((c, x) => (x === 0 ? null : 'I'));
+    }
+    g.hardDrop();
+  });
+  await page.waitForSelector('#gameover-overlay.visible', { timeout: 5000 });
+  assert.match((await page.textContent('#gameover-title'))!, /GAME OVER/);
+  assert.equal((await page.textContent('#btn-rematch'))!.trim(), 'Play again');
+
+  // --- play again restarts instantly -----------------------------------
+  await page.click('#btn-rematch');
+  await page.waitForFunction(
+    () => !document.querySelector('#gameover-overlay')!.classList.contains('visible'),
+    null,
+    { timeout: 5000 }
+  );
+  assert.equal(await page.evaluate(() => window.__tetris.inGame), true);
+  assert.equal(await page.evaluate(() => window.__tetris.solo), true);
+
+  assert.deepEqual(errors, [], 'no browser console errors');
+});
