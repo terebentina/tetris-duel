@@ -1,11 +1,14 @@
 // App shell: menu / lobby / game screens, input handling, the game loop
 // and the glue between the engine, renderer and network layer.
 
-import { Game } from './engine.js';
-import { Renderer, drawPreview } from './render.js';
-import { Net } from './net.js';
+import { Game } from './engine.ts';
+import type { Snapshot } from './engine.ts';
+import { Renderer, drawPreview } from './render.ts';
+import { Net } from './net.ts';
+import type { LeaderboardEntry, ServerMessage } from './protocol.ts';
 
-const $ = (sel) => document.querySelector(sel);
+const $ = <T extends HTMLElement = HTMLElement>(sel: string): T =>
+  document.querySelector(sel) as T;
 
 const screens = {
   menu: $('#screen-menu'),
@@ -13,32 +16,40 @@ const screens = {
   game: $('#screen-game'),
 };
 
-function show(name) {
+type ScreenName = keyof typeof screens;
+
+function show(name: ScreenName): void {
   for (const [k, el] of Object.entries(screens)) {
     el.classList.toggle('active', k === name);
   }
 }
 
+interface Banner {
+  text: string;
+  t: number;
+  color: string;
+}
+
 const net = new Net();
-let game = null;
-let renderer = null;
-let oppRenderer = null;
-let oppSnapshot = null;
+let game: Game | null = null;
+let renderer: Renderer | null = null;
+let oppRenderer: Renderer | null = null;
+let oppSnapshot: Snapshot | null = null;
 let playerName = localStorage.getItem('tetris.name') || '';
-let roomCode = null;
+let roomCode: string | null = null;
 let inGame = false;
 let lastStateSync = 0;
-let banner = { text: '', t: 0, color: '#fff' };
+let banner: Banner = { text: '', t: 0, color: '#fff' };
 
 // ---------------------------------------------------------------------
 // Menu + leaderboard
 
-$('#name-input').value = playerName;
+$<HTMLInputElement>('#name-input').value = playerName;
 
-async function refreshLeaderboard() {
+async function refreshLeaderboard(): Promise<void> {
   try {
     const res = await fetch('/api/leaderboard');
-    const entries = await res.json();
+    const entries = (await res.json()) as LeaderboardEntry[];
     const tbody = $('#leaderboard tbody');
     tbody.innerHTML = '';
     if (entries.length === 0) {
@@ -49,7 +60,7 @@ async function refreshLeaderboard() {
       const tr = document.createElement('tr');
       for (const v of [i + 1, e.name, e.wins, e.lines]) {
         const td = document.createElement('td');
-        td.textContent = v;
+        td.textContent = String(v);
         tr.appendChild(td);
       }
       tbody.appendChild(tr);
@@ -59,11 +70,11 @@ async function refreshLeaderboard() {
   }
 }
 
-function requireName() {
-  const name = $('#name-input').value.trim();
+function requireName(): string | null {
+  const name = $<HTMLInputElement>('#name-input').value.trim();
   if (!name) {
     setMenuError('Enter your name first');
-    $('#name-input').focus();
+    $<HTMLInputElement>('#name-input').focus();
     return null;
   }
   playerName = name;
@@ -71,7 +82,7 @@ function requireName() {
   return name;
 }
 
-function setMenuError(text) {
+function setMenuError(text: string): void {
   $('#menu-error').textContent = text;
 }
 
@@ -90,7 +101,7 @@ $('#btn-create').addEventListener('click', async () => {
 $('#btn-join').addEventListener('click', async () => {
   const name = requireName();
   if (!name) return;
-  const code = $('#join-code').value.trim().toUpperCase();
+  const code = $<HTMLInputElement>('#join-code').value.trim().toUpperCase();
   if (code.length !== 4) {
     setMenuError('Enter the 4-letter room code');
     return;
@@ -105,18 +116,19 @@ $('#btn-join').addEventListener('click', async () => {
 });
 
 $('#join-code').addEventListener('input', (e) => {
-  e.target.value = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 4);
+  const input = e.target as HTMLInputElement;
+  input.value = input.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 4);
 });
 
 // ---------------------------------------------------------------------
 // Lobby
 
-function enterLobby({ code, opponent }) {
+function enterLobby({ code, opponent }: { code: string; opponent: string | null }): void {
   roomCode = code;
   $('#lobby-code').textContent = code;
   $('#lobby-you').textContent = playerName;
   setLobbyOpponent(opponent || null);
-  $('#btn-ready').disabled = false;
+  $<HTMLButtonElement>('#btn-ready').disabled = false;
   $('#btn-ready').textContent = 'Ready';
   $('#lobby-status').textContent = opponent
     ? 'Press Ready when you are set!'
@@ -124,14 +136,14 @@ function enterLobby({ code, opponent }) {
   show('lobby');
 }
 
-function setLobbyOpponent(name) {
+function setLobbyOpponent(name: string | null): void {
   $('#lobby-opponent').textContent = name || 'waiting…';
   $('#lobby-opponent').classList.toggle('muted', !name);
 }
 
 $('#btn-ready').addEventListener('click', () => {
   net.send({ type: 'ready' });
-  $('#btn-ready').disabled = true;
+  $<HTMLButtonElement>('#btn-ready').disabled = true;
   $('#btn-ready').textContent = 'Waiting for opponent…';
 });
 
@@ -142,7 +154,7 @@ $('#btn-lobby-back').addEventListener('click', () => {
 
 $('#btn-copy-code').addEventListener('click', async () => {
   try {
-    await navigator.clipboard.writeText(roomCode);
+    await navigator.clipboard.writeText(roomCode || '');
     $('#btn-copy-code').textContent = 'Copied!';
     setTimeout(() => ($('#btn-copy-code').textContent = 'Copy'), 1200);
   } catch {
@@ -150,7 +162,7 @@ $('#btn-copy-code').addEventListener('click', async () => {
   }
 });
 
-function backToMenu() {
+function backToMenu(): void {
   inGame = false;
   game = null;
   oppSnapshot = null;
@@ -175,8 +187,8 @@ net.on('error', (msg) => setMenuError(msg.error));
 net.on('start', (msg) => startGame(msg));
 net.on('opponent_state', (msg) => {
   oppSnapshot = msg.state;
-  $('#opp-score').textContent = msg.state.score;
-  $('#opp-lines').textContent = msg.state.lines;
+  $('#opp-score').textContent = String(msg.state.score);
+  $('#opp-lines').textContent = String(msg.state.lines);
 });
 net.on('attack', (msg) => {
   if (!game || game.over) return;
@@ -186,53 +198,53 @@ net.on('end', (msg) => endGame(msg));
 net.on('opponent_left', () => {
   if (!inGame) {
     setLobbyOpponent(null);
-    $('#btn-ready').disabled = false;
+    $<HTMLButtonElement>('#btn-ready').disabled = false;
     $('#btn-ready').textContent = 'Ready';
     $('#lobby-status').textContent = 'Opponent left. Share the code again…';
   }
 });
-net.on('_close', () => {
+net.onClose = () => {
   if (inGame || screens.lobby.classList.contains('active')) {
     backToMenu();
     setMenuError('Connection lost');
   }
-});
+};
 
 // ---------------------------------------------------------------------
 // Game
 
-const ATTACK_NAMES = {
+const ATTACK_NAMES: Record<number, string> = {
   1: 'CURSED PIECE!',
   2: 'WIND STORM!',
   3: 'SPIN CHAOS!',
   4: 'TETRIS FURY!!!',
 };
 
-function startGame({ seed, opponent }) {
+function startGame({ seed, opponent }: { seed: number; opponent: string }): void {
   game = new Game(seed);
   inGame = true;
   oppSnapshot = null;
   lastStateSync = 0;
-  banner = { text: '', t: 0 };
+  banner = { text: '', t: 0, color: '#fff' };
   $('#you-name').textContent = playerName;
   $('#opp-name').textContent = opponent;
   $('#opp-score').textContent = '0';
   $('#opp-lines').textContent = '0';
   $('#gameover-overlay').classList.remove('visible');
   if (!renderer) {
-    renderer = new Renderer($('#board'), { cell: 28 });
-    oppRenderer = new Renderer($('#opp-board'), { cell: 13 });
+    renderer = new Renderer($<HTMLCanvasElement>('#board'), { cell: 28 });
+    oppRenderer = new Renderer($<HTMLCanvasElement>('#opp-board'), { cell: 13 });
   }
   show('game');
   countdown(3);
 }
 
 let countdownT = 0;
-function countdown(n) {
+function countdown(n: number): void {
   countdownT = n * 1000;
 }
 
-function endGame(msg) {
+function endGame(msg: Extract<ServerMessage, { type: 'end' }>): void {
   inGame = false;
   $('#gameover-title').textContent = msg.youWin ? 'YOU WIN! 🏆' : 'YOU LOSE';
   $('#gameover-title').className = msg.youWin ? 'win' : 'lose';
@@ -241,7 +253,7 @@ function endGame(msg) {
     : msg.youWin
       ? `${$('#opp-name').textContent} topped out!`
       : 'You ran out of space.';
-  $('#btn-rematch').disabled = false;
+  $<HTMLButtonElement>('#btn-rematch').disabled = false;
   $('#btn-rematch').textContent = 'Rematch';
   $('#gameover-overlay').classList.add('visible');
   refreshLeaderboard();
@@ -249,7 +261,7 @@ function endGame(msg) {
 
 $('#btn-rematch').addEventListener('click', () => {
   net.send({ type: 'ready' });
-  $('#btn-rematch').disabled = true;
+  $<HTMLButtonElement>('#btn-rematch').disabled = true;
   $('#btn-rematch').textContent = 'Waiting for opponent…';
 });
 
@@ -267,8 +279,10 @@ const ARR = 40; // ms between repeats
 let dasTimer = 0;
 let dasDir = 0;
 
-function playing() {
-  return inGame && game && !game.over && countdownT <= 0;
+// The game, but only while it is actually playable (started, not over,
+// countdown finished) — null otherwise.
+function playing(): Game | null {
+  return inGame && game && !game.over && countdownT <= 0 ? game : null;
 }
 
 document.addEventListener('keydown', (e) => {
@@ -278,13 +292,13 @@ document.addEventListener('keydown', (e) => {
       keys.left = true;
       dasDir = -1;
       dasTimer = -DAS;
-      if (playing()) game.move(-1);
+      playing()?.move(-1);
       break;
     case 'ArrowRight':
       keys.right = true;
       dasDir = 1;
       dasTimer = -DAS;
-      if (playing()) game.move(1);
+      playing()?.move(1);
       break;
     case 'ArrowDown':
       keys.down = true;
@@ -292,14 +306,14 @@ document.addEventListener('keydown', (e) => {
       break;
     case 'ArrowUp':
     case 'KeyX':
-      if (playing()) game.rotate(1);
+      playing()?.rotate(1);
       break;
     case 'KeyZ':
-      if (playing()) game.rotate(-1);
+      playing()?.rotate(-1);
       break;
     case 'Space':
       e.preventDefault();
-      if (playing()) game.hardDrop();
+      playing()?.hardDrop();
       break;
   }
 });
@@ -324,57 +338,58 @@ document.addEventListener('keyup', (e) => {
 // ---------------------------------------------------------------------
 // HUD
 
-function updateHud() {
-  $('#you-score').textContent = game.score;
-  $('#you-lines').textContent = game.lines;
-  $('#you-level').textContent = game.level;
+function updateHud(g: Game, r: Renderer): void {
+  $('#you-score').textContent = String(g.score);
+  $('#you-lines').textContent = String(g.lines);
+  $('#you-level').textContent = String(g.level);
 
   // next queue (show skulls while cursed pieces are incoming)
-  const previews = document.querySelectorAll('.next-piece');
+  const previews = document.querySelectorAll<HTMLCanvasElement>('.next-piece');
   previews.forEach((c, i) => {
-    if (i < game.hardPieces) drawPreview(c, null, { skull: true });
-    else drawPreview(c, game.queue[i - game.hardPieces]);
+    if (i < g.hardPieces) drawPreview(c, null, { skull: true });
+    else drawPreview(c, g.queue[i - g.hardPieces]);
   });
 
   // active effect badges
-  const fx = [];
-  if (game.hardPieces > 0) fx.push(`☠ cursed ×${game.hardPieces}`);
-  if (game.windPieces > 0)
-    fx.push(`${game.windDir > 0 ? '💨→' : '←💨'} wind ×${game.windPieces}`);
-  if (game.spinPieces > 0) fx.push(`🌀 spin ×${game.spinPieces}`);
+  const fx: string[] = [];
+  if (g.hardPieces > 0) fx.push(`☠ cursed ×${g.hardPieces}`);
+  if (g.windPieces > 0)
+    fx.push(`${g.windDir > 0 ? '💨→' : '←💨'} wind ×${g.windPieces}`);
+  if (g.spinPieces > 0) fx.push(`🌀 spin ×${g.spinPieces}`);
   $('#effects').innerHTML = fx.length
     ? fx.map((f) => `<span class="fx">${f}</span>`).join('')
     : '<span class="fx none">no curses</span>';
 
-  renderer.setWind(game.windPieces > 0, game.windDir);
-  renderer.setSpin(game.spinPieces > 0);
+  r.setWind(g.windPieces > 0, g.windDir);
+  r.setSpin(g.spinPieces > 0);
 }
 
 // ---------------------------------------------------------------------
 // Main loop
 
 let lastTime = performance.now();
-function loop(now) {
+function loop(now: number): void {
   const dt = Math.min(50, now - lastTime);
   lastTime = now;
 
-  if (inGame && game) {
+  if (inGame && game && renderer && oppRenderer) {
+    const g = game;
     if (countdownT > 0) {
       countdownT -= dt;
-    } else if (!game.over) {
+    } else if (!g.over) {
       // held-key auto repeat
       if (dasDir !== 0 && playing()) {
         dasTimer += dt;
         while (dasTimer >= ARR) {
           dasTimer -= ARR;
-          game.move(dasDir);
+          g.move(dasDir);
         }
       }
-      game.update(dt);
+      g.update(dt);
     }
 
     // consume engine events
-    for (const ev of game.takeEvents()) {
+    for (const ev of g.takeEvents()) {
       switch (ev.type) {
         case 'clear':
           renderer.lineClear(ev.rows, ev.count);
@@ -397,33 +412,33 @@ function loop(now) {
       }
     }
 
-    updateHud();
+    updateHud(g, renderer);
     renderer.update(dt);
-    renderer.render(game, { isOver: game.over });
+    renderer.render(g, { isOver: g.over });
     oppRenderer.update(dt);
     oppRenderer.renderSnapshot(oppSnapshot);
 
-    drawOverlays(dt);
+    drawOverlays(renderer, dt);
 
     // throttled board sync to the opponent
     lastStateSync += dt;
-    if (lastStateSync >= 120 && !game.over) {
+    if (lastStateSync >= 120 && !g.over) {
       lastStateSync = 0;
-      net.send({ type: 'state', state: game.snapshot() });
+      net.send({ type: 'state', state: g.snapshot() });
     }
   }
 
   requestAnimationFrame(loop);
 }
 
-function showBanner(text, color) {
+function showBanner(text: string, color: string): void {
   banner = { text, t: 1.4, color };
 }
 
-function drawOverlays(dt) {
-  const ctx = renderer.ctx;
-  const w = renderer.canvas.width;
-  const h = renderer.canvas.height;
+function drawOverlays(r: Renderer, dt: number): void {
+  const ctx = r.ctx;
+  const w = r.canvas.width;
+  const h = r.canvas.height;
 
   if (countdownT > 0) {
     ctx.fillStyle = 'rgba(5,6,12,0.6)';
@@ -452,6 +467,16 @@ function drawOverlays(dt) {
 }
 
 // Debug/testing hook (used by the headless browser e2e test).
+declare global {
+  interface Window {
+    __tetris: {
+      readonly game: Game | null;
+      readonly inGame: boolean;
+      readonly countdownT: number;
+    };
+  }
+}
+
 window.__tetris = {
   get game() {
     return game;

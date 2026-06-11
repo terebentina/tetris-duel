@@ -28,6 +28,11 @@ keep clearing. The game ends when one player's stack reaches the top
 
 ## Running
 
+Requires **Node 24+** — the codebase is TypeScript and runs directly via
+Node's built-in type stripping; there is no build step. The server strips
+types from the client `.ts` files on the fly when serving them to the
+browser.
+
 ```bash
 cd tetris
 npm install
@@ -52,17 +57,19 @@ same port as HTTP, so the ingress must allow connection upgrades.
 
 ## Architecture
 
-- `server/server.js` — HTTP static server + WebSocket endpoint (`ws`),
-  `/api/leaderboard`, `/healthz`
-- `server/rooms.js` — transport-agnostic matchmaking/relay logic
+- `server/server.ts` — HTTP static server + WebSocket endpoint (`ws`),
+  `/api/leaderboard`, `/healthz`; serves client `.ts` files type-stripped
+- `server/rooms.ts` — transport-agnostic matchmaking/relay logic
   (rooms, ready/start with shared seed, attack relay, forfeits, rematch)
-- `server/leaderboard.js` — JSON-file persistence
-- `public/js/engine.js` — the Tetris engine (pure logic, runs in Node
+- `server/leaderboard.ts` — JSON-file persistence
+- `public/js/engine.ts` — the Tetris engine (pure logic, runs in Node
   and the browser): board, gravity, kicks, line clears, attack effects
-- `public/js/pieces.js` — tetromino tables, seeded RNG, 7-bag
-- `public/js/render.js` — canvas renderer: particles, wind gusts, line
+- `public/js/pieces.ts` — tetromino tables, seeded RNG, 7-bag
+- `public/js/protocol.ts` — wire-protocol types shared by server,
+  client and tests
+- `public/js/render.ts` — canvas renderer: particles, wind gusts, line
   flashes, screen shake, ghost piece, previews
-- `public/js/main.js` — screens (menu/lobby/game), input (DAS/ARR),
+- `public/js/main.ts` — screens (menu/lobby/game), input (DAS/ARR),
   game loop, network glue
 
 Gameplay runs client-side; the server relays board snapshots and attack
@@ -72,6 +79,7 @@ events and is the authority on match start/end and the leaderboard.
 
 ```bash
 npm test             # engine, pieces, rooms, leaderboard, ws e2e, fuzz
+npm run typecheck    # tsc --noEmit (strict, no build output)
 ```
 
 The suite includes a full end-to-end match over real WebSockets and a

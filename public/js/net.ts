@@ -1,17 +1,23 @@
 // Thin WebSocket client wrapper with reconnect-on-menu semantics.
 
+import type { ClientMessage, ServerMessage } from './protocol.ts';
+
+export type NetStatus = 'connected' | 'disconnected' | 'error';
+
 export class Net {
-  constructor() {
-    this.ws = null;
-    this.handlers = new Map();
-    this.onStatus = () => {};
+  ws: WebSocket | null = null;
+  handlers = new Map<string, (msg: ServerMessage) => void>();
+  onStatus: (status: NetStatus) => void = () => {};
+  onClose: () => void = () => {};
+
+  on<T extends ServerMessage['type']>(
+    type: T,
+    fn: (msg: Extract<ServerMessage, { type: T }>) => void
+  ): void {
+    this.handlers.set(type, fn as (msg: ServerMessage) => void);
   }
 
-  on(type, fn) {
-    this.handlers.set(type, fn);
-  }
-
-  connect() {
+  connect(): Promise<void> {
     if (this.ws && this.ws.readyState <= WebSocket.OPEN) return Promise.resolve();
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     const ws = new WebSocket(`${proto}://${location.host}`);
@@ -27,13 +33,12 @@ export class Net {
       };
       ws.onclose = () => {
         this.onStatus('disconnected');
-        const fn = this.handlers.get('_close');
-        if (fn) fn();
+        this.onClose();
       };
       ws.onmessage = (ev) => {
-        let msg;
+        let msg: ServerMessage;
         try {
-          msg = JSON.parse(ev.data);
+          msg = JSON.parse(String(ev.data)) as ServerMessage;
         } catch {
           return;
         }
@@ -43,13 +48,13 @@ export class Net {
     });
   }
 
-  send(obj) {
+  send(obj: ClientMessage): void {
     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(obj));
     }
   }
 
-  close() {
+  close(): void {
     if (this.ws) this.ws.close();
     this.ws = null;
   }

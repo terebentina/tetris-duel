@@ -4,14 +4,16 @@ import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { WebSocketServer } from 'ws';
-import { Leaderboard } from './leaderboard.js';
-import { RoomManager } from './rooms.js';
+import { stripTypeScriptTypes } from 'node:module';
+import { WebSocketServer, type WebSocket } from 'ws';
+import { Leaderboard } from './leaderboard.ts';
+import { RoomManager, isRecord } from './rooms.ts';
+import type { Client } from './rooms.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 
-const MIME = {
+const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
   '.css': 'text/css; charset=utf-8',
@@ -21,15 +23,22 @@ const MIME = {
   '.ico': 'image/x-icon',
 };
 
+// `isAlive` is bookkeeping for the heartbeat below.
+type LiveSocket = WebSocket & { isAlive?: boolean };
+
+export interface CreateServerOptions {
+  leaderboardFile?: string;
+}
+
 export function createServer({
   leaderboardFile = process.env.LEADERBOARD_FILE ||
     path.join(__dirname, 'data', 'leaderboard.json'),
-} = {}) {
+}: CreateServerOptions = {}) {
   const leaderboard = new Leaderboard(leaderboardFile);
   const manager = new RoomManager(leaderboard);
 
   const server = http.createServer((req, res) => {
-    const url = new URL(req.url, 'http://localhost');
+    const url = new URL(req.url || '/', 'http://localhost');
 
     if (url.pathname === '/api/leaderboard') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -57,16 +66,24 @@ export function createServer({
         res.end('not found');
         return;
       }
+      const ext = path.extname(filePath);
+      if (ext === '.ts') {
+        // Browsers can't run TypeScript: strip the types on the fly and
+        // serve plain JavaScript (no build step needed).
+        res.writeHead(200, { 'Content-Type': 'text/javascript; charset=utf-8' });
+        res.end(stripTypeScriptTypes(data.toString('utf8')));
+        return;
+      }
       res.writeHead(200, {
-        'Content-Type': MIME[path.extname(filePath)] || 'application/octet-stream',
+        'Content-Type': MIME[ext] || 'application/octet-stream',
       });
       res.end(data);
     });
   });
 
   const wss = new WebSocketServer({ server });
-  wss.on('connection', (ws) => {
-    const client = {
+  wss.on('connection', (ws: LiveSocket) => {
+    const client: Client = {
       send(obj) {
         if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(obj));
       },
@@ -75,16 +92,16 @@ export function createServer({
       ready: false,
     };
     ws.on('message', (data) => {
-      let msg;
+      let msg: unknown;
       try {
-        msg = JSON.parse(data);
+        msg = JSON.parse(String(data));
       } catch {
         return;
       }
       try {
         manager.handleMessage(client, msg);
       } catch (err) {
-        console.error('error handling message', msg && msg.type, err);
+        console.error('error handling message', isRecord(msg) ? msg.type : msg, err);
       }
     });
     ws.on('close', () => manager.handleDisconnect(client));
@@ -97,7 +114,7 @@ export function createServer({
 
   // Drop dead connections so abandoned games end in a forfeit.
   const heartbeat = setInterval(() => {
-    for (const ws of wss.clients) {
+    for (const ws of wss.clients as Set<LiveSocket>) {
       if (ws.isAlive === false) {
         ws.terminate();
         continue;

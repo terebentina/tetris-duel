@@ -4,8 +4,8 @@
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { Game, COLS, ROWS } from '../public/js/engine.js';
-import { mulberry32 } from '../public/js/pieces.js';
+import { Game, COLS, ROWS } from '../public/js/engine.ts';
+import { mulberry32 } from '../public/js/pieces.ts';
 
 test('random games run to completion without corruption', () => {
   for (let seed = 1; seed <= 20; seed++) {

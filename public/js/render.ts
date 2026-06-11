@@ -1,29 +1,58 @@
 // Canvas rendering: boards, pieces, ghost, next queue and all the
 // juice — particles, wind streaks, line flashes, screen shake.
 
-import { COLORS, PIECES } from './pieces.js';
-import { COLS, ROWS, HIDDEN } from './engine.js';
+import { COLORS, PIECES } from './pieces.ts';
+import type { PieceType } from './pieces.ts';
+import { COLS, ROWS, HIDDEN } from './engine.ts';
+import type { Game, Snapshot } from './engine.ts';
 
 const VISIBLE_ROWS = ROWS - HIDDEN;
 
+interface Particle {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  life: number;
+  color: string;
+  size: number;
+}
+
+interface FlashRow {
+  row: number;
+  t: number;
+}
+
+interface WindGust {
+  x: number;
+  y: number;
+  dir: number;
+  speed: number;
+  len: number;
+}
+
 export class Renderer {
-  constructor(canvas, { cell = 28 } = {}) {
+  canvas: HTMLCanvasElement;
+  cell: number;
+  ctx: CanvasRenderingContext2D;
+  particles: Particle[] = [];
+  flashRows: FlashRow[] = [];
+  shake = 0;
+  windGusts: WindGust[] = [];
+  windDir = 0;
+  spinning = false;
+
+  constructor(canvas: HTMLCanvasElement, { cell = 28 }: { cell?: number } = {}) {
     this.canvas = canvas;
     this.cell = cell;
     canvas.width = COLS * cell;
     canvas.height = VISIBLE_ROWS * cell;
-    this.ctx = canvas.getContext('2d');
-    this.particles = [];
-    this.flashRows = []; // {row, t}
-    this.shake = 0;
-    this.windGusts = []; // {y, x, dir, speed}
-    this.windDir = 0;
-    this.spinning = false;
+    this.ctx = canvas.getContext('2d')!;
   }
 
   // ---- effect triggers -------------------------------------------------
 
-  lineClear(rows, count) {
+  lineClear(rows: number[], count: number): void {
     for (const row of rows) {
       this.flashRows.push({ row, t: 0.35 });
       for (let i = 0; i < COLS * 2; i++) {
@@ -41,7 +70,7 @@ export class Renderer {
     if (count >= 2) this.shake = Math.min(10, count * 3);
   }
 
-  attackHit(n) {
+  attackHit(n: number): void {
     this.shake = Math.min(14, 4 + n * 2.5);
     for (let i = 0; i < n * 18; i++) {
       this.particles.push({
@@ -56,21 +85,21 @@ export class Renderer {
     }
   }
 
-  setWind(active, dir) {
+  setWind(active: boolean, dir: number): void {
     this.windDir = active ? dir : 0;
   }
 
-  setSpin(active) {
+  setSpin(active: boolean): void {
     this.spinning = active;
   }
 
-  lockThud() {
+  lockThud(): void {
     this.shake = Math.max(this.shake, 1.5);
   }
 
   // ---- frame -----------------------------------------------------------
 
-  update(dt) {
+  update(dt: number): void {
     const s = dt / 1000;
     this.particles = this.particles.filter((p) => (p.life -= s) > 0);
     for (const p of this.particles) {
@@ -98,7 +127,12 @@ export class Renderer {
     for (const g of this.windGusts) g.x += g.dir * g.speed * s;
   }
 
-  drawCell(x, y, color, { ghost = false, alpha = 1 } = {}) {
+  drawCell(
+    x: number,
+    y: number,
+    color: string,
+    { ghost = false, alpha = 1 }: { ghost?: boolean; alpha?: number } = {}
+  ): void {
     const c = this.cell;
     const px = x * c;
     const py = (y - HIDDEN) * c;
@@ -122,7 +156,7 @@ export class Renderer {
     ctx.restore();
   }
 
-  render(game, { isOver = false } = {}) {
+  render(game: Game, { isOver = false }: { isOver?: boolean } = {}): void {
     const ctx = this.ctx;
     const w = this.canvas.width;
     const h = this.canvas.height;
@@ -211,7 +245,7 @@ export class Renderer {
   }
 
   // Render an opponent snapshot ({rows, current}) sent over the network.
-  renderSnapshot(snap) {
+  renderSnapshot(snap: Snapshot | null): void {
     const ctx = this.ctx;
     const w = this.canvas.width;
     const h = this.canvas.height;
@@ -223,7 +257,7 @@ export class Renderer {
       if (!row) continue;
       for (let x = 0; x < COLS; x++) {
         const t = row[x];
-        if (t !== '.') this.drawCell(x, y, COLORS[t] || '#888');
+        if (t !== '.') this.drawCell(x, y, (COLORS as Record<string, string>)[t] || '#888');
       }
     }
     if (snap.current) {
@@ -240,8 +274,12 @@ export class Renderer {
 }
 
 // Draw a single piece centered in a small preview canvas (next queue).
-export function drawPreview(canvas, type, { skull = false } = {}) {
-  const ctx = canvas.getContext('2d');
+export function drawPreview(
+  canvas: HTMLCanvasElement,
+  type: PieceType | null | undefined,
+  { skull = false }: { skull?: boolean } = {}
+): void {
+  const ctx = canvas.getContext('2d')!;
   ctx.clearRect(0, 0, canvas.width, canvas.height);
   if (skull) {
     ctx.fillStyle = '#ff8ba0';

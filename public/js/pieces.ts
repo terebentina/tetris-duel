@@ -1,9 +1,18 @@
 // Tetromino definitions, seeded RNG and the 7-bag randomizer.
 // Shared between the browser client and Node tests (pure ES module).
 
-export const TYPES = ['I', 'O', 'T', 'S', 'Z', 'J', 'L'];
+export type PieceType = 'I' | 'O' | 'T' | 'S' | 'Z' | 'J' | 'L';
 
-export const COLORS = {
+export type Cell = [number, number];
+
+export interface PieceDef {
+  size: number;
+  rotations: Cell[][];
+}
+
+export const TYPES: PieceType[] = ['I', 'O', 'T', 'S', 'Z', 'J', 'L'];
+
+export const COLORS: Record<PieceType, string> = {
   I: '#00e5ff',
   O: '#ffd500',
   T: '#b517e8',
@@ -14,7 +23,7 @@ export const COLORS = {
 };
 
 // Base shapes inside their rotation bounding box ('X' = filled cell).
-const BASE_SHAPES = {
+const BASE_SHAPES: Record<PieceType, string[]> = {
   I: ['....', 'XXXX', '....', '....'],
   O: ['XX', 'XX'],
   T: ['.X.', 'XXX', '...'],
@@ -24,13 +33,13 @@ const BASE_SHAPES = {
   L: ['..X', 'XXX', '...'],
 };
 
-function matrixFromStrings(rows) {
+function matrixFromStrings(rows: string[]): number[][] {
   return rows.map((r) => [...r].map((c) => (c === 'X' ? 1 : 0)));
 }
 
-function rotateCW(m) {
+function rotateCW(m: number[][]): number[][] {
   const n = m.length;
-  const out = Array.from({ length: n }, () => Array(n).fill(0));
+  const out = Array.from({ length: n }, () => Array<number>(n).fill(0));
   for (let y = 0; y < n; y++) {
     for (let x = 0; x < n; x++) {
       out[x][n - 1 - y] = m[y][x];
@@ -39,8 +48,8 @@ function rotateCW(m) {
   return out;
 }
 
-function cellsOf(m) {
-  const cells = [];
+function cellsOf(m: number[][]): Cell[] {
+  const cells: Cell[] = [];
   for (let y = 0; y < m.length; y++) {
     for (let x = 0; x < m.length; x++) {
       if (m[y][x]) cells.push([x, y]);
@@ -51,19 +60,20 @@ function cellsOf(m) {
 
 // PIECES[type] = { size, rotations: [cells0, cells1, cells2, cells3] }
 // where cellsN is an array of [x, y] offsets inside the bounding box.
-export const PIECES = {};
+const pieces: Partial<Record<PieceType, PieceDef>> = {};
 for (const type of TYPES) {
   let m = matrixFromStrings(BASE_SHAPES[type]);
-  const rotations = [];
+  const rotations: Cell[][] = [];
   for (let r = 0; r < 4; r++) {
     rotations.push(cellsOf(m));
     m = rotateCW(m);
   }
-  PIECES[type] = { size: m.length, rotations };
+  pieces[type] = { size: m.length, rotations };
 }
+export const PIECES = pieces as Record<PieceType, PieceDef>;
 
 // Deterministic, seedable PRNG (mulberry32). Returns floats in [0, 1).
-export function mulberry32(seed) {
+export function mulberry32(seed: number): () => number {
   let a = seed >>> 0;
   return function () {
     a |= 0;
@@ -75,12 +85,14 @@ export function mulberry32(seed) {
 }
 
 export class SevenBag {
-  constructor(seed) {
+  rng: () => number;
+  bag: PieceType[] = [];
+
+  constructor(seed: number) {
     this.rng = mulberry32(seed);
-    this.bag = [];
   }
 
-  next() {
+  next(): PieceType {
     if (this.bag.length === 0) {
       this.bag = [...TYPES];
       for (let i = this.bag.length - 1; i > 0; i--) {
@@ -88,6 +100,6 @@ export class SevenBag {
         [this.bag[i], this.bag[j]] = [this.bag[j], this.bag[i]];
       }
     }
-    return this.bag.pop();
+    return this.bag.pop()!;
   }
 }

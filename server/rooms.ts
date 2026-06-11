@@ -1,24 +1,53 @@
 // Room/matchmaking logic for 1v1 games. Transport-agnostic: a "client"
-// is any object with `send(obj)` — the WebSocket wiring lives in server.js
+// is any object with `send(msg)` — the WebSocket wiring lives in server.ts
 // and tests use fakes.
+
+import type { ServerMessage } from '../public/js/protocol.ts';
+import type { Snapshot } from '../public/js/engine.ts';
 
 const CODE_ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no 0/O/1/I
 const NAME_MAX = 16;
 
-export function sanitizeName(name) {
+export interface Client {
+  send(msg: ServerMessage): void;
+  name: string | null;
+  room: Room | null;
+  ready: boolean;
+}
+
+export interface Room {
+  code: string;
+  players: Client[];
+  started: boolean;
+  lines: Map<Client, number>; // client -> lines cleared this game
+}
+
+// The subset of Leaderboard the room manager needs (tests use fakes).
+export interface LeaderboardLike {
+  record(name: string, result: { win: boolean; lines?: number }): void;
+}
+
+export function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null;
+}
+
+export function sanitizeName(name: unknown): string | null {
   if (typeof name !== 'string') return null;
   const clean = name.replace(/[^\w \-.]/g, '').trim().slice(0, NAME_MAX);
   return clean.length > 0 ? clean : null;
 }
 
 export class RoomManager {
-  constructor(leaderboard, { rng = Math.random } = {}) {
+  leaderboard: LeaderboardLike;
+  rng: () => number;
+  rooms = new Map<string, Room>();
+
+  constructor(leaderboard: LeaderboardLike, { rng = Math.random }: { rng?: () => number } = {}) {
     this.leaderboard = leaderboard;
     this.rng = rng;
-    this.rooms = new Map(); // code -> room
   }
 
-  generateCode() {
+  generateCode(): string {
     for (;;) {
       let code = '';
       for (let i = 0; i < 4; i++) {
@@ -28,8 +57,8 @@ export class RoomManager {
     }
   }
 
-  handleMessage(client, msg) {
-    if (!msg || typeof msg.type !== 'string') return;
+  handleMessage(client: Client, msg: unknown): void {
+    if (!isRecord(msg) || typeof msg.type !== 'string') return;
     switch (msg.type) {
       case 'create':
         return this.create(client, msg);
@@ -50,17 +79,17 @@ export class RoomManager {
     }
   }
 
-  create(client, msg) {
+  create(client: Client, msg: Record<string, unknown>): void {
     const name = sanitizeName(msg.name);
     if (!name) return client.send({ type: 'error', error: 'invalid name' });
     this.handleDisconnect(client); // leave any previous room
     client.name = name;
     const code = this.generateCode();
-    const room = {
+    const room: Room = {
       code,
       players: [client],
       started: false,
-      lines: new Map(), // client -> lines cleared this game
+      lines: new Map(),
     };
     this.rooms.set(code, room);
     client.room = room;
@@ -68,7 +97,7 @@ export class RoomManager {
     client.send({ type: 'created', code, name });
   }
 
-  join(client, msg) {
+  join(client: Client, msg: Record<string, unknown>): void {
     const name = sanitizeName(msg.name);
     if (!name) return client.send({ type: 'error', error: 'invalid name' });
     const code = typeof msg.code === 'string' ? msg.code.trim().toUpperCase() : '';
@@ -83,17 +112,17 @@ export class RoomManager {
     client.ready = false;
     room.players.push(client);
     const host = room.players[0];
-    client.send({ type: 'joined', code, name, opponent: host.name });
+    client.send({ type: 'joined', code, name, opponent: host.name! });
     host.send({ type: 'opponent_joined', opponent: name });
   }
 
-  opponentOf(client) {
+  opponentOf(client: Client): Client | null {
     const room = client.room;
     if (!room) return null;
     return room.players.find((p) => p !== client) || null;
   }
 
-  ready(client) {
+  ready(client: Client): void {
     const room = client.room;
     if (!room || room.started) return;
     client.ready = true;
@@ -108,43 +137,45 @@ export class RoomManager {
         p.send({
           type: 'start',
           seed,
-          opponent: this.opponentOf(p).name,
+          opponent: this.opponentOf(p)!.name!,
         });
       }
     }
   }
 
-  relayState(client, msg) {
-    const opp = this.opponentOf(client);
-    if (!opp || !client.room.started) return;
-    opp.send({ type: 'opponent_state', state: msg.state });
-  }
-
-  relayClear(client, msg) {
+  relayState(client: Client, msg: Record<string, unknown>): void {
     const room = client.room;
     const opp = this.opponentOf(client);
-    if (!opp || !room.started) return;
-    const count = Math.max(1, Math.min(4, msg.count | 0));
+    if (!room || !opp || !room.started) return;
+    // Pure relay: the snapshot comes straight from the other client.
+    opp.send({ type: 'opponent_state', state: msg.state as Snapshot });
+  }
+
+  relayClear(client: Client, msg: Record<string, unknown>): void {
+    const room = client.room;
+    const opp = this.opponentOf(client);
+    if (!room || !opp || !room.started) return;
+    const count = Math.max(1, Math.min(4, Number(msg.count) | 0));
     room.lines.set(client, (room.lines.get(client) || 0) + count);
     opp.send({ type: 'attack', count });
   }
 
   // `client` topped out -> the opponent wins.
-  gameOver(client) {
+  gameOver(client: Client): void {
     const room = client.room;
     if (!room || !room.started) return;
     const opp = this.opponentOf(client);
     this.finishGame(room, opp, client);
   }
 
-  finishGame(room, winner, loser) {
+  finishGame(room: Room, winner: Client | null, loser: Client | null): void {
     room.started = false;
     if (this.leaderboard && winner && loser) {
-      this.leaderboard.record(winner.name, {
+      this.leaderboard.record(winner.name!, {
         win: true,
         lines: room.lines.get(winner) || 0,
       });
-      this.leaderboard.record(loser.name, {
+      this.leaderboard.record(loser.name!, {
         win: false,
         lines: room.lines.get(loser) || 0,
       });
@@ -155,7 +186,7 @@ export class RoomManager {
     }
   }
 
-  handleDisconnect(client) {
+  handleDisconnect(client: Client): void {
     const room = client.room;
     if (!room) return;
     const opp = this.opponentOf(client);
@@ -166,8 +197,8 @@ export class RoomManager {
       // Forfeit: the remaining player wins.
       room.started = false;
       if (this.leaderboard) {
-        this.leaderboard.record(opp.name, { win: true, lines: room.lines.get(opp) || 0 });
-        this.leaderboard.record(client.name, {
+        this.leaderboard.record(opp.name!, { win: true, lines: room.lines.get(opp) || 0 });
+        this.leaderboard.record(client.name!, {
           win: false,
           lines: room.lines.get(client) || 0,
         });
