@@ -9,6 +9,7 @@ import {
   WIND_INTERVAL,
   SPIN_INTERVAL,
 } from '../public/js/engine.ts';
+import type { GameEvent } from '../public/js/engine.ts';
 
 function fillRow(game: Game, y: number, { except = [] }: { except?: number[] } = {}): void {
   for (let x = 0; x < COLS; x++) {
@@ -110,18 +111,29 @@ test('applyAttack scales effects with line count', () => {
   assert.equal(g2.hardPieces, 2);
   assert.equal(g2.windPieces, 3);
   assert.equal(g2.spinPieces, 0);
+  assert.equal(g2.flipPieces, 0);
+  assert.equal(g2.fogPieces, 0);
 
   const g3 = new Game(9);
   g3.applyAttack(3);
   assert.equal(g3.hardPieces, 3);
   assert.equal(g3.windPieces, 4);
   assert.equal(g3.spinPieces, 3);
+  assert.equal(g3.flipPieces, 3);
+  assert.equal(g3.fogPieces, 0);
 
   const g4 = new Game(9);
   g4.applyAttack(4);
   assert.equal(g4.hardPieces, 6);
   assert.equal(g4.windPieces, 7);
   assert.equal(g4.spinPieces, 6);
+  assert.equal(g4.flipPieces, 6);
+  assert.equal(g4.fogPieces, 6);
+  // a 4-line attack also raises one garbage row with a single hole
+  const bottom = g4.board[ROWS - 1];
+  assert.equal(bottom.filter((c) => c === 'G').length, COLS - 1);
+  assert.equal(bottom.filter((c) => c === null).length, 1);
+  assert.ok(g4.takeEvents().some((e) => e.type === 'garbage'));
 });
 
 test('attack count is clamped to [1,4]', () => {
@@ -160,11 +172,72 @@ test('effect counters decrement as pieces lock', () => {
   const g = new Game(13);
   g.windPieces = 2;
   g.spinPieces = 1;
+  g.fogPieces = 2;
+  g.flipPieces = 1;
   g.hardDrop();
   assert.equal(g.windPieces, 1);
   assert.equal(g.spinPieces, 0);
+  assert.equal(g.fogPieces, 1);
+  assert.equal(g.flipPieces, 0);
   g.hardDrop();
   assert.equal(g.windPieces, 0);
+  assert.equal(g.fogPieces, 0);
+});
+
+test('flip curse reverses horizontal input', () => {
+  const g = new Game(20);
+  g.flipPieces = 1;
+  const x0 = g.current.x;
+  assert.ok(g.move(1));
+  assert.equal(g.current.x, x0 - 1, 'right input moved the piece left');
+  g.hardDrop(); // spends the flip
+  assert.equal(g.flipPieces, 0);
+  const x1 = g.current.x;
+  assert.ok(g.move(1));
+  assert.equal(g.current.x, x1 + 1, 'controls back to normal');
+});
+
+test('addGarbage raises the stack with single-hole rows', () => {
+  const g = new Game(21);
+  g.board[ROWS - 1][0] = 'T';
+  g.addGarbage(2);
+  assert.equal(g.board.length, ROWS);
+  assert.equal(g.board[ROWS - 3][0], 'T', 'existing stack pushed up');
+  for (const y of [ROWS - 1, ROWS - 2]) {
+    assert.equal(g.board[y].filter((c) => c === null).length, 1);
+    assert.equal(g.board[y].filter((c) => c === 'G').length, COLS - 1);
+  }
+  const ev = g.takeEvents().find((e) => e.type === 'garbage');
+  assert.ok(ev && ev.n === 2);
+});
+
+test('consecutive clearing locks build a combo, a dry lock resets it', () => {
+  const g = new Game(22);
+  fillRow(g, ROWS - 1);
+  g.clearLines();
+  assert.equal(g.combo, 1);
+  fillRow(g, ROWS - 1);
+  g.clearLines();
+  assert.equal(g.combo, 2);
+  const clears = g
+    .takeEvents()
+    .filter((e): e is Extract<GameEvent, { type: 'clear' }> => e.type === 'clear');
+  assert.deepEqual(clears.map((e) => e.combo), [1, 2]);
+  g.hardDrop(); // locks without clearing anything
+  assert.equal(g.combo, 0);
+});
+
+test('clear events carry the colours and points of the cleared rows', () => {
+  const g = new Game(23);
+  fillRow(g, ROWS - 1); // a full row of 'I'
+  g.clearLines();
+  const ev = g
+    .takeEvents()
+    .find((e): e is Extract<GameEvent, { type: 'clear' }> => e.type === 'clear');
+  assert.ok(ev);
+  assert.equal(ev.points, 100);
+  assert.equal(ev.colors.length, 1);
+  assert.ok(ev.colors[0].every((c) => c === 'I'));
 });
 
 test('snapshot round-trips board state compactly', () => {

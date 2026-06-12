@@ -11,6 +11,9 @@ export const HIDDEN = 2;
 
 export const HARD_TYPES: PieceType[] = ['S', 'Z'];
 
+// Anything that can occupy a settled board cell: a piece colour or garbage.
+export type BoardCell = PieceType | 'G';
+
 const SCORE_TABLE: Record<number, number> = { 1: 100, 2: 300, 3: 500, 4: 800 };
 
 // Effect pacing (ms)
@@ -35,12 +38,22 @@ export interface ActivePiece {
 }
 
 export type GameEvent =
-  | { type: 'clear'; rows: number[]; count: number }
+  | {
+      type: 'clear';
+      rows: number[];
+      count: number;
+      // Cell colours of the cleared rows (captured before they vanish),
+      // points awarded and current combo streak — all renderer fodder.
+      colors: BoardCell[][];
+      points: number;
+      combo: number;
+    }
   | { type: 'lock' }
   | { type: 'gameover' }
   | { type: 'attack'; n: number }
   | { type: 'wind'; dir: number }
   | { type: 'spin' }
+  | { type: 'garbage'; n: number }
   | { type: 'spawn'; piece: PieceType };
 
 // Compact board snapshot (array of row strings) for network sync.
@@ -57,18 +70,22 @@ export class Game {
   seed: number;
   bag: SevenBag;
   rng: () => number;
-  board: (PieceType | null)[][];
+  board: (BoardCell | null)[][];
   queue: PieceType[];
   current!: ActivePiece; // assigned by spawn() in the constructor
   score = 0;
   lines = 0;
   level = 1;
   over = false;
+  // Consecutive piece locks that cleared at least one line.
+  combo = 0;
   // Difficulty effects inflicted by the opponent, measured in
   // "pieces remaining under the effect".
   hardPieces = 0;
   windPieces = 0;
   spinPieces = 0;
+  fogPieces = 0; // settled stack is hidden behind fog
+  flipPieces = 0; // left/right controls are reversed
   windDir = 1;
   // timers
   gravityAcc = 0;
@@ -76,8 +93,9 @@ export class Game {
   spinAcc = 0;
   softDropping = false;
   // Events for the renderer / network layer to consume each frame:
-  // {type:'clear', rows, count} {type:'lock'} {type:'gameover'}
-  // {type:'attack', n} {type:'wind', dir} {type:'spin'} {type:'spawn'}
+  // {type:'clear', rows, count, colors, points, combo} {type:'lock'}
+  // {type:'gameover'} {type:'attack', n} {type:'wind', dir} {type:'spin'}
+  // {type:'garbage', n} {type:'spawn'}
   events: GameEvent[] = [];
 
   constructor(seed: number = Date.now() & 0xffffffff) {
@@ -85,7 +103,7 @@ export class Game {
     this.bag = new SevenBag(seed);
     this.rng = mulberry32(seed ^ 0x9e3779b9);
     this.board = Array.from({ length: ROWS }, () =>
-      Array<PieceType | null>(COLS).fill(null)
+      Array<BoardCell | null>(COLS).fill(null)
     );
     this.queue = [this.bag.next(), this.bag.next(), this.bag.next()];
     this.spawn();
@@ -129,7 +147,13 @@ export class Game {
     return false;
   }
 
+  // Player horizontal input — the flip curse reverses it.
   move(dx: number): boolean {
+    return this.shift(this.flipPieces > 0 ? -dx : dx);
+  }
+
+  // Raw horizontal shift, unaffected by curses (wind uses this directly).
+  shift(dx: number): boolean {
     if (this.over) return false;
     const p = { ...this.current, x: this.current.x + dx };
     if (this.collides(p)) return false;
@@ -206,7 +230,10 @@ export class Game {
     // Spend one piece off each active effect counter.
     if (this.windPieces > 0) this.windPieces--;
     if (this.spinPieces > 0) this.spinPieces--;
+    if (this.fogPieces > 0) this.fogPieces--;
+    if (this.flipPieces > 0) this.flipPieces--;
     const cleared = this.clearLines();
+    if (cleared === 0) this.combo = 0;
     this.spawn();
     return cleared;
   }
@@ -217,21 +244,32 @@ export class Game {
       if (this.board[y].every((c) => c)) fullRows.push(y);
     }
     if (fullRows.length === 0) return 0;
+    const colors = fullRows.map((y) => this.board[y].map((c) => c as BoardCell));
     for (const y of fullRows) {
       this.board.splice(y, 1);
-      this.board.unshift(Array<PieceType | null>(COLS).fill(null));
+      this.board.unshift(Array<BoardCell | null>(COLS).fill(null));
     }
     const n = fullRows.length;
-    this.score += (SCORE_TABLE[n] || 0) * this.level;
+    const points = (SCORE_TABLE[n] || 0) * this.level;
+    this.score += points;
     this.lines += n;
     this.level = Math.floor(this.lines / 10) + 1;
-    this.events.push({ type: 'clear', rows: fullRows, count: n });
+    this.combo++;
+    this.events.push({
+      type: 'clear',
+      rows: fullRows,
+      count: n,
+      colors,
+      points,
+      combo: this.combo,
+    });
     return n;
   }
 
   // Opponent cleared `n` lines at once — make life harder over here.
-  // 1: next piece(s) are S/Z   2: + wind drift   3: + auto-rotation
-  // 4: everything, longer and stronger.
+  // 1: next piece(s) are S/Z   2: + wind drift
+  // 3: + auto-rotation + reversed controls
+  // 4: everything, longer and stronger, plus fog and a garbage row.
   applyAttack(n: number): void {
     if (this.over) return;
     n = Math.max(1, Math.min(4, n));
@@ -242,13 +280,44 @@ export class Game {
     }
     if (n >= 3) {
       this.spinPieces += n;
+      this.flipPieces += n;
     }
     if (n >= 4) {
       this.hardPieces += 2;
       this.windPieces += 2;
       this.spinPieces += 2;
+      this.flipPieces += 2;
+      this.fogPieces += n + 2;
+      this.addGarbage(1);
     }
     this.events.push({ type: 'attack', n });
+  }
+
+  // Push `n` garbage rows in from the bottom, each with one random hole.
+  addGarbage(n: number): void {
+    if (this.over) return;
+    for (let i = 0; i < n; i++) {
+      const hole = Math.floor(this.rng() * COLS);
+      this.board.shift();
+      this.board.push(
+        Array.from({ length: COLS }, (_, x): BoardCell | null =>
+          x === hole ? null : 'G'
+        )
+      );
+    }
+    this.events.push({ type: 'garbage', n });
+    // Lift the falling piece clear of the raised stack; if there is no
+    // room left above it, the garbage buries the player.
+    let lifted = { ...this.current };
+    while (this.collides(lifted) && lifted.y > 0) {
+      lifted = { ...lifted, y: lifted.y - 1 };
+    }
+    if (this.collides(lifted)) {
+      this.over = true;
+      this.events.push({ type: 'gameover' });
+    } else {
+      this.current = lifted;
+    }
   }
 
   // Advance the simulation by dt milliseconds.
@@ -269,7 +338,7 @@ export class Game {
       while (this.windAcc >= WIND_INTERVAL) {
         this.windAcc -= WIND_INTERVAL;
         if (this.rng() < 0.2) this.windDir = -this.windDir;
-        if (this.move(this.windDir)) {
+        if (this.shift(this.windDir)) {
           this.events.push({ type: 'wind', dir: this.windDir });
         }
       }
