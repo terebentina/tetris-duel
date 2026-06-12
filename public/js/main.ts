@@ -236,7 +236,7 @@ net.onClose = () => {
 const ATTACK_NAMES: Record<number, string> = {
   1: 'CURSED PIECE!',
   2: 'WIND STORM!',
-  3: 'SPIN CHAOS!',
+  3: 'SPIN + FLIP CHAOS!',
   4: 'TETRIS FURY!!!',
 };
 
@@ -391,12 +391,16 @@ function updateHud(g: Game, r: Renderer): void {
   if (g.windPieces > 0)
     fx.push(`${g.windDir > 0 ? '💨→' : '←💨'} wind ×${g.windPieces}`);
   if (g.spinPieces > 0) fx.push(`🌀 spin ×${g.spinPieces}`);
+  if (g.flipPieces > 0) fx.push(`⇄ flipped ×${g.flipPieces}`);
+  if (g.fogPieces > 0) fx.push(`🌫 fog ×${g.fogPieces}`);
   $('#effects').innerHTML = fx.length
     ? fx.map((f) => `<span class="fx">${f}</span>`).join('')
     : '<span class="fx none">no curses</span>';
 
   r.setWind(g.windPieces > 0, g.windDir);
   r.setSpin(g.spinPieces > 0);
+  r.setFog(g.fogPieces > 0);
+  r.setFlip(g.flipPieces > 0);
 }
 
 // ---------------------------------------------------------------------
@@ -427,19 +431,25 @@ function loop(now: number): void {
     for (const ev of g.takeEvents()) {
       switch (ev.type) {
         case 'clear':
-          renderer.lineClear(ev.rows, ev.count);
+          renderer.lineClear(ev.rows, ev.count, ev.colors);
+          renderer.scorePopup(`+${ev.points}`, ev.count >= 4 ? '#ffd500' : '#ffffff');
+          if (ev.combo >= 2)
+            renderer.scorePopup(`COMBO ×${ev.combo}!`, '#00e5ff', { size: 22 });
           // In solo play you are your own opponent: the curse you would
           // inflict on them lands on your board instead.
           if (solo) g.applyAttack(ev.count);
           else net.send({ type: 'clear', count: ev.count });
           showBanner(
             ev.count >= 4 ? 'TETRIS!' : `${ev.count} LINE${ev.count > 1 ? 'S' : ''}!`,
-            '#19d24b'
+            ev.count >= 4 ? '#ffd500' : '#19d24b'
           );
           break;
         case 'attack':
           renderer.attackHit(ev.n);
           showBanner(ATTACK_NAMES[ev.n] || 'ATTACK!', '#ff3355');
+          break;
+        case 'garbage':
+          renderer.garbageHit(ev.n);
           break;
         case 'lock':
           renderer.lockThud();
